@@ -2,14 +2,15 @@
 #include <linux/module.h>
 #include <linux/kernel.h> /* printk() */
 #include <linux/slab.h> /* kmalloc() */
-#include <linux/fs.h> /* everything... */
+#include <linux/fs.h>
 #include <linux/errno.h> /* error codes */
 #include <linux/types.h> /* size_t */
 #include <linux/fcntl.h> /* O_ACCMODE */
 #include <linux/uaccess.h>/* copy_from/to_user */
 #include <linux/sched.h> /* timers and jiffy macros */
 #include <linux/seq_file.h>
-#include <linux/proc_fs.h>
+#include <linux/gpio.h>
+#include <linux/interrupt.h>
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Ian Chadwick & Sophie Evans");
@@ -34,6 +35,8 @@ static void off_callback(struct timer_list *timer);
 /***************************************************************/
 /*                    Defines, Variables and Structs           */
 /***************************************************************/
+#define ON  1
+#define OFF 0
 
 /*Update file ops struct with pointers to correct handlers*/
 struct file_operations mytraffic_fops = 
@@ -53,6 +56,11 @@ static char op_mode_out[16] = {0},
             yellow_status[4] = {0},
             red_status[4] = {0},
             pedestrian_status[12] = {0};
+
+static unsigned int redLED      = 67;
+static unsigned int yellowLED   = 68;
+static unsigned int greenLED    = 44;
+
 
 const unsigned max_output = 1024;
 static int major_num = 61;
@@ -80,8 +88,18 @@ static int __init traffic_init(void)
 
     timer_setup(&timer, green_callback, 0);
     mod_timer(&timer, jiffies + 3*(HZ/cycle_rate));
-    printk(KERN_ALERT "GREEN ON!\n");
 
+    gpio_request(greenLED, "sysfs");
+    gpio_direction_output(greenLED, ON);
+    gpio_export(greenLED, false);
+
+    gpio_request(redLED, "sysfs");
+    gpio_direction_output(redLED, OFF);
+    gpio_export(redLED, false);
+
+    gpio_request(yellowLED, "sysfs");
+    gpio_direction_output(yellowLED, OFF);
+    gpio_export(yellowLED, false);
     
     strcpy(op_mode_out, "normal");
     strcpy(red_status, "OFF");
@@ -99,6 +117,15 @@ fail:
 
 static void __exit traffic_exit(void)
 {
+    gpio_set_value(greenLED, OFF);
+    gpio_unexport(greenLED);
+    gpio_free(greenLED);
+    gpio_set_value(yellowLED, OFF);
+    gpio_unexport(yellowLED);
+    gpio_free(yellowLED);
+    gpio_set_value(redLED, OFF);
+    gpio_unexport(redLED);
+    gpio_free(redLED);
     unregister_chrdev(major_num, "mytraffic");
     printk(KERN_ALERT "Exiting mytraffic module.\n");
     del_timer(&timer);
@@ -127,32 +154,31 @@ static void green_callback(struct timer_list *timer)
     timer_setup(timer, yellow_callback, 0);
     mod_timer(timer, jiffies + 1*(HZ/cycle_rate));
     strcpy(green_status, "OFF");
+    gpio_set_value(greenLED, OFF);
     strcpy(yellow_status, "ON");
-   // printk(KERN_ALERT "GREEN OFF!\n");
-    printk(KERN_ALERT "YELLOW ON!\n");
+    gpio_set_value(yellowLED, ON);
 }
 
 static void yellow_callback(struct timer_list *timer)
 {
     if (op_mode == 0)
     {
-        if (!pedestrian){
+        if (!pedestrian)
+        {
             timer_setup(timer, red_callback, 0);
             mod_timer(timer, jiffies + 2*(HZ/cycle_rate));
             strcpy(yellow_status, "OFF");
+            gpio_set_value(yellowLED, OFF);
             strcpy(red_status, "ON");
-            // printk(KERN_ALERT "YELLOW OFF!\n");
-            printk(KERN_ALERT "RED ON!\n");
+            gpio_set_value(redLED, ON);
         }
         else
         {
             //FIX ME!!
             timer_setup(timer, green_callback, 0);
             mod_timer(timer, jiffies + 3*(HZ/cycle_rate));
-            strcpy(red_status, "OFF");
+            strcpy(yellow_status, "OFF");
             strcpy(green_status, "ON");
-        // printk(KERN_ALERT "RED OFF!\n");
-            printk(KERN_ALERT "GREEN ON!\n");
         }
     } 
     else
@@ -162,8 +188,6 @@ static void yellow_callback(struct timer_list *timer)
         strcpy(red_status, "OFF");
         strcpy(green_status, "OFF");
         strcpy(yellow_status, "OFF");
-    // printk(KERN_ALERT "RED OFF!\n");
-        printk(KERN_ALERT "OFF STATE!\n");
     }
 }
 
@@ -171,10 +195,10 @@ static void red_callback(struct timer_list *timer)
 {
     timer_setup(timer, green_callback, 0);
     mod_timer(timer, jiffies + 3*(HZ/cycle_rate));
+    gpio_set_value(redLED, OFF);
     strcpy(red_status, "OFF");
     strcpy(green_status, "ON");
-   // printk(KERN_ALERT "RED OFF!\n");
-    printk(KERN_ALERT "GREEN ON!\n");
+    gpio_set_value(greenLED, ON);
 }
 
 static void fred_callback(struct timer_list *timer)
@@ -183,8 +207,6 @@ static void fred_callback(struct timer_list *timer)
     mod_timer(timer, jiffies + 1*(HZ/cycle_rate));
     strcpy(yellow_status, "OFF");
     strcpy(red_status, "ON");
-   // printk(KERN_ALERT "GREEN OFF!\n");
-    printk(KERN_ALERT "RED ON!\n");
 }
 
 static void fellow_callback(struct timer_list *timer)
@@ -193,8 +215,6 @@ static void fellow_callback(struct timer_list *timer)
     mod_timer(timer, jiffies + 1*(HZ/cycle_rate));
     strcpy(green_status, "OFF");
     strcpy(yellow_status, "ON");
-   // printk(KERN_ALERT "GREEN OFF!\n");
-    printk(KERN_ALERT "YELLOW ON!\n");
 }
 
 static void off_callback(struct timer_list *timer)
@@ -206,8 +226,6 @@ static void off_callback(struct timer_list *timer)
         strcpy(red_status, "OFF");
         strcpy(yellow_status, "OFF");
         strcpy(green_status, "ON");
-    // printk(KERN_ALERT "RED OFF!\n");
-        printk(KERN_ALERT "GREEN ON!\n");
     } 
     else if (op_mode == 1)
     {
@@ -216,8 +234,6 @@ static void off_callback(struct timer_list *timer)
         strcpy(red_status, "ON");
         strcpy(green_status, "OFF");
         strcpy(yellow_status, "OFF");
-    // printk(KERN_ALERT "RED OFF!\n");
-        printk(KERN_ALERT "RED ON!\n");
     }
     else
     {
@@ -226,15 +242,5 @@ static void off_callback(struct timer_list *timer)
         strcpy(red_status, "OFF");
         strcpy(green_status, "OFF");
         strcpy(yellow_status, "ON");
-    // printk(KERN_ALERT "RED OFF!\n");
-        printk(KERN_ALERT "YELLOW ON!\n");
     }
-
-    timer_setup(timer, yellow_callback, 0);
-    mod_timer(timer, jiffies + 1*(HZ/cycle_rate));
-    strcpy(green_status, "OFF");
-    strcpy(yellow_status, "OFF");
-    strcpy(red_status, "OFF");
-   // printk(KERN_ALERT "GREEN OFF!\n");
-    //printk(KERN_ALERT "YELLOW ON!\n");
 }
